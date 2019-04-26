@@ -81,6 +81,8 @@ team_t team = {
 int mm_init(void)
 {
     /* Create the initial empty heap */
+    
+    //20?
     if ((heap_listp = mem_sbrk(20*WSIZE)) == (void *)-1)
         return -1;
     PUT(heap_listp, 0); /* Alignment padding */
