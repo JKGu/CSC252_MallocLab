@@ -45,7 +45,7 @@ team_t team = {
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 
-
+//____________________________________________MACROS_____________________________________________
 /* Basic constants and macros */
 #define WSIZE 4 /* Word and header/footer size (bytes) */
 #define DSIZE 8 /* Double word size (bytes) */
@@ -72,24 +72,93 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+//__________________________________________________________________________
+static void *extend_heap(size_t dwords);
+static void *coalesce(void *bp);
+//static void *find_fit(size_t size);
+//static void place(void *bp, size_t asize);
+//static void place(void *bp, size_t asize);
 
 
+//________________________________STATIC FUCNTIONS__________________________________________________
+static void *extend_heap(size_t words){
+    char *bp;
+    size_t size;
 
+/* Allocate an even number of words to maintain alignment */
+     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+     if ((long)(bp = mem_sbrk(size)) == -1)
+     return NULL;
+
+ /* Initialize free block header/footer and the epilogue header */
+     PUT(HDRP(bp), PACK(size, 0)); /* Free block header */
+     PUT(FTRP(bp), PACK(size, 0)); /* Free block footer */
+     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
+
+ /* Coalesce if the previous block was free */
+     return coalesce(bp);
+}
+
+static void *coalesce(void *bp){
+ size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+ size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+ size_t size = GET_SIZE(HDRP(bp));
+
+ if (prev_alloc && next_alloc) { /* Case 1 */
+ return bp;
+ }
+
+ else if (prev_alloc && !next_alloc) { /* Case 2 */
+ size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+ PUT(HDRP(bp), PACK(size, 0));
+ PUT(FTRP(bp), PACK(size,0));
+ }
+
+ else if (!prev_alloc && next_alloc) { /* Case 3 */
+ size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+ PUT(FTRP(bp), PACK(size, 0));
+ PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+ bp = PREV_BLKP(bp);
+ }
+
+ else { /* Case 4 */
+ size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
+ GET_SIZE(FTRP(NEXT_BLKP(bp)));
+ PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+ PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+ bp = PREV_BLKP(bp);
+ }
+ return bp;
+}
+
+//__________________________________________________________________________________________
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-    /* Create the initial empty heap */
-    
-    //20?
+    // Create the initial empty heap 
     if ((heap_listp = mem_sbrk(20*WSIZE)) == (void *)-1)
         return -1;
-    PUT(heap_listp, 0); /* Alignment padding */
-    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); /* Prologue header */
-    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); /* Prologue footer */
-    PUT(heap_listp + (3*WSIZE), PACK(0, 1)); /* Epilogue header */
-    heap_listp += (2*WSIZE);
+
+    //Segregated free list    
+    PUT(heap_listp, 0); 
+    PUT(heap_listp + (1*WSIZE), 0);
+    PUT(heap_listp + (2*WSIZE), 0); 
+    PUT(heap_listp + (3*WSIZE), 0); 
+    PUT(heap_listp + (4*WSIZE), 0); 
+    PUT(heap_listp + (5*WSIZE), 0); 
+    PUT(heap_listp + (6*WSIZE), 0); 
+    PUT(heap_listp + (7*WSIZE), 0); 
+    PUT(heap_listp + (8*WSIZE), 0); 
+    PUT(heap_listp + (9*WSIZE), 0); 
+    PUT(heap_listp + (10*WSIZE), 0); 
+    PUT(heap_listp + (11*WSIZE), PACK(DSIZE,1));
+    PUT(heap_listp + (12*WSIZE), PACK(DSIZE,1));
+    PUT(heap_listp + (13*WSIZE), PACK(0,1));  
+
+    block_list_start = heap_listp;
+    heap_listp += (12*WSIZE);
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
@@ -162,55 +231,7 @@ void *mm_realloc(void *ptr, size_t size)
     return newptr;
 }
 
-static void *extend_heap(size_t words){
-    char *bp;
-    size_t size;
 
-/* Allocate an even number of words to maintain alignment */
-     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
-     if ((long)(bp = mem_sbrk(size)) == -1)
-     return NULL;
-
- /* Initialize free block header/footer and the epilogue header */
-     PUT(HDRP(bp), PACK(size, 0)); /* Free block header */
-     PUT(FTRP(bp), PACK(size, 0)); /* Free block footer */
-     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
-
- /* Coalesce if the previous block was free */
-     return coalesce(bp);
-}
-
-static void *coalesce(void *bp){
- size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
- size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
- size_t size = GET_SIZE(HDRP(bp));
-
- if (prev_alloc && next_alloc) { /* Case 1 */
- return bp;
- }
-
- else if (prev_alloc && !next_alloc) { /* Case 2 */
- size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
- PUT(HDRP(bp), PACK(size, 0));
- PUT(FTRP(bp), PACK(size,0));
- }
-
- else if (!prev_alloc && next_alloc) { /* Case 3 */
- size += GET_SIZE(HDRP(PREV_BLKP(bp)));
- PUT(FTRP(bp), PACK(size, 0));
- PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
- bp = PREV_BLKP(bp);
- }
-
- else { /* Case 4 */
- size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
- GET_SIZE(FTRP(NEXT_BLKP(bp)));
- PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
- PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
- bp = PREV_BLKP(bp);
- }
- return bp;
-}
 
 
 
