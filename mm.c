@@ -82,6 +82,7 @@ void* heap_listp;
 void* seg_list;
 void* block_list_start = NULL;
 
+
 int mm_init(void);
 void* mm_malloc(size_t size);
 void mm_free(void *ptr);
@@ -95,7 +96,7 @@ static void removeFreePointer(void *p);
 static void *getFreePosition(size_t size);
 static void *extend_heap(size_t dwords);
 static void *coalesce(void *bp);
-
+static void *find_list_root(size_t size);
 //________________________________STATIC FUCNTIONS__________________________________________________
 static void *extend_heap(size_t words){
     char *bp;
@@ -241,13 +242,38 @@ void removeFreePointer(void *p){
 }
 
 static void *find_fit(size_t asize){
-    void *bp;
-    for(bp=heap_listp; GET_SIZE(HDRP(bp))!=0; bp = NEXT_BLKP(bp)){
-        if(  !GET_ALLOC(HDRP(bp) ) && (asize <= GET_SIZE( HDRP(bp) ) ) )
-            return bp;
+    void *root = find_list_root(size);
+    void *tmpP = GET(root);
+    for(root; root!=(heap_listp-(2*WSIZE)); root+=WSIZE)
+    {
+        void *tmpP = GET(root);
+        while(tmpP != NULL)
+        {
+            if(GET_SIZE(HDRP(tmpP))>=size) return tmpP;
+            tmpP = GET(NEXT_LINKNODE_RP(tmpP));
+        }
     }
     return NULL;
 }
+
+void *find_list_root(size_t size)
+{
+    int i = 0;
+    if(size<=8) i=0;
+    else if(size<=16) i= 1;
+    else if(size<=32) i= 2;
+    else if(size<=64) i= 3;
+    else if(size<=128) i= 4;
+    else if(size<=256) i= 5;
+    else if(size<=512) i= 6;
+    else if(size<=2048) i= 7;
+    else if(size<=4096) i= 8;
+    else i= 9;
+    /*find the index of bin which will put this block */
+    return block_list_start+(i*WSIZE);
+}
+
+
 //__________________________________________________________________________________________
 /* 
  * mm_init - initialize the malloc package.
