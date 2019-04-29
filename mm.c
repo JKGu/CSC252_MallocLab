@@ -79,7 +79,7 @@ static void *find_fit(size_t size);//9.8
 static void place(void *bp, size_t asize);//9.9
 void insertFreePointer(void *p);
 void removeFreePointer(void *p);
-void getFreeCat(size_t size)
+void getFreePosition(size_t size)
 void block_list_start = NULL;
 //__________________________________________________________________________
 static void *extend_heap(size_t dwords);
