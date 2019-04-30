@@ -60,6 +60,10 @@ team_t team = {
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val))
 
+/* Read and write a pointer at address p */
+#define GET_PTR(p) ((unsigned int *)(long)(GET(p)))
+#define PUT_PTR(p, ptr) (*(unsigned int *)(p) = ((long)ptr))
+
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
@@ -72,22 +76,32 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
-/* helpers */
-#define NEXT_FREEBLKP(bp) ((char*)bp) //previous pointer in segragated list
-#define PREV_FREEBLKP(bp)((char*)bp+WSIZE)//next pointer in segragated list
-static void *find_fit(size_t size);//9.8
-static void place(void *bp, size_t asize);//9.9
-void insertFreePointer(void *p);
-void removeFreePointer(void *p);
-void getFreePosition(size_t size)
-void block_list_start = NULL;
-//__________________________________________________________________________
+
+#define PREV_FREEBLKP(bp) ((char*)bp) //previous pointer in segragated list
+#define NEXT_FREEBLKP(bp)((char*)bp+WSIZE)//next pointer in segragated list
+
+
+//——————————————————————————————VARIABLES AND PROTOTYPES——————————————————————————————————————————————————
+static void* heap_listp;
+//static void* seg_list=NULL;
+static void* block_list_start;
+
+
+int mm_init(void);
+void* mm_malloc(size_t size);
+void mm_free(void *ptr);
+void* mm_realloc(void *ptr, size_t size);
+int mm_check();
+
+static void *find_fit(size_t size);
+static void place(void *bp, size_t asize);
+static void insertFreePointer(void *p);
+static void removeFreePointer(void *p);
+//static void *getFreePosition(size_t size);
 static void *extend_heap(size_t dwords);
 static void *coalesce(void *bp);
-
-//static void place(void *bp, size_t asize);
-
-
+static void *find_list_root(size_t size);
+static void *recoalesce(void* p, size_t size, int *nextFree);
 //________________________________STATIC FUCNTIONS__________________________________________________
 static void *extend_heap(size_t words){
     char *bp;
@@ -104,7 +118,9 @@ static void *extend_heap(size_t words){
      PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
 
  /* Coalesce if the previous block was free */
-     return coalesce(bp);
+    bp = coalesce(bp);
+    //PUT(seg_list, bp);
+     return bp;
 }
 
 static void *coalesce(void *bp){
@@ -113,20 +129,20 @@ static void *coalesce(void *bp){
  size_t size = GET_SIZE(HDRP(bp));
 
  if (prev_alloc && next_alloc) { /* Case 1 */
- insertFreePointer(bp);
+// insertFreePointer(bp);
  return bp;
  }
 
  else if (prev_alloc && !next_alloc) { /* Case 2 */
  size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
- removeFreePointer(NEXT_FREEBLKP(bp));
+ removeFreePointer(NEXT_BLKP(bp));
  PUT(HDRP(bp), PACK(size, 0));
  PUT(FTRP(bp), PACK(size,0));
  }
 
  else if (!prev_alloc && next_alloc) { /* Case 3 */
  size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-  removeFreePointer(PREV_FREEBLKP(bp));
+  removeFreePointer(PREV_BLKP(bp));
  PUT(FTRP(bp), PACK(size, 0));
  PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
  bp = PREV_BLKP(bp);
@@ -135,8 +151,8 @@ static void *coalesce(void *bp){
  else { /* Case 4 */
  size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
  GET_SIZE(FTRP(NEXT_BLKP(bp)));
-  removeFreePointer(NEXT_FREEBLKP(bp));
-  removeFreePointer(PREV_FREEBLKP(bp));
+  removeFreePointer(NEXT_BLKP(bp));
+  removeFreePointer(PREV_BLKP(bp));
  PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
  PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
  bp = PREV_BLKP(bp);
@@ -146,58 +162,63 @@ static void *coalesce(void *bp){
 }
 
 //find the appropriate start pointer in the segaragated list based on the size
-void getFreePosition(size_t size){
-    if(size<=32){
-        return block_list_start;
-    }else if(size<=64){
-        return block_list_start+WSIZE;
-    }else if(size<=128){
-        return block_list_start+2*WSIZE;
-    }else if(size<=256){
-        return block_list_start+3*WSIZE;
-    }else if(size<=512){
-        return block_list_start+4*WSIZE;
-    }else if(size<=1024){
-        return block_list_start+5*WSIZE;
-    }
+// static void* getFreePosition(size_t size){
+//     if(size<=32){
+//         return block_list_start;
+//     }else if(size<=64){
+//         return block_list_start+WSIZE;
+//     }else if(size<=128){
+//         return block_list_start+2*WSIZE;
+//     }else if(size<=256){
+//         return block_list_start+3*WSIZE;
+//     }else if(size<=512){
+//         return block_list_start+4*WSIZE;
+//     }else if(size<=1024){
+//         return block_list_start+5*WSIZE;
+//     }
+// }
+
+void *find_list_root(size_t size)
+{
+    int i = 0;
+    if(size<=8) i=0;
+    else if(size<=16) i= 1;
+    else if(size<=32) i= 2;
+    else if(size<=64) i= 3;
+    else if(size<=128) i= 4;
+    else if(size<=256) i= 5;
+    else if(size<=512) i= 6;
+    else if(size<=2048) i= 7;
+    else if(size<=4096) i= 8;
+    else i= 9;
+    /*find the index of bin which will put this block */
+    return block_list_start+(i*WSIZE);
 }
+
     
 
 //insert the block at the correct pointer in the segragated free list
-void insertFreePointer(void *p){
-    void *root  = getFreePosition(GET_SIZE(HDRP(p)));
-    void *prev = root;
-    void *next = GET(root);
-
-    while(next!=NULL){
-        if(GET_SIZE(HDRP(next))>GET_SIZE(HDRP(p))){
-            break;
-        }
-        prev = next;
-        next = GET(next);
+void insertFreePointer(void *bp){
+    size_t size;
+    size = GET_SIZE(HDRP(bp));
+    void* index = find_list_root(size);
+    if (GET_PTR(index) == NULL) {
+        PUT_PTR(index, bp);
+        PUT_PTR(bp, NULL);
+        PUT_PTR((unsigned int *)bp + 1, NULL);
+    } else {   
+        PUT_PTR(bp, GET_PTR(index));
+        PUT_PTR(GET_PTR(index) + 1, bp);   
+        PUT_PTR((unsigned int *)bp + 1, NULL);
+        PUT_PTR(index, bp);
     }
 
-    if(prev=root){
-        PUT(root,p);
-        PUT(NEXT_FREEBLKP(p),next);
-        PUT(PREV_FREEBLKP(p),NULL);
-        if(next!=NULL){
-            PUT(PREV_FREEBLKP(next),p);
-        }
-    }else{
-        PUT(NEXT_FREEBLKP(prev),p);
-        PUT(NEXT_FREEBLKP(p),next);
-        PUT(PREV_FREEBLKP(p),prev);
-        if(next!=NULL){
-            PUT(PREV_FREEBLKP(next),p);
-        }
-    }
 
 }
 void removeFreePointer(void *p){
-    void *root  = getFreePosition(GET_SIZE(HDRP(p)));
-    void *prev = GET(PREV_FREEBLKP(p));
-    void *next = GET(NEXT_FREEBLKP(p));
+    void *root  = find_list_root(GET_SIZE(HDRP(p)));
+    void *prev = PREV_FREEBLKP(p);
+    void *next = NEXT_FREEBLKP(p);
     //if the previous one is null
     if(prev==NULL){
         if(next!=NULL){
@@ -212,17 +233,18 @@ void removeFreePointer(void *p){
     }
     PUT(NEXT_FREEBLKP(p),NULL);
     PUT(PREV_FREEBLKP(p),NULL);
-
 }
 
  static void place(void* bp, size_t asize){
     size_t csize = GET_SIZE(HDRP(bp));
+    removeFreePointer(bp);
     if((csize-asize)>=(2*DSIZE)){
         PUT(HDRP(bp),PACK(asize,1));
         PUT(FTRP(bp),PACK(asize,1));
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp),PACK(csize-asize,0));
         PUT(FTRP(bp),PACK(csize-asize,0));
+    insertFreePointer(bp);
     }else{
         PUT(HDRP(bp),PACK(csize,1));
         PUT(HDRP(bp),PACK(csize,1));
@@ -231,8 +253,71 @@ void removeFreePointer(void *p){
 }
 
 static void *find_fit(size_t asize){
+void *bp;
+
+   for(bp=heap_listp;GET_SIZE(HDRP(bp))>0;bp=NEXT_BLKP(bp)){
+    if(!GET_ALLOC(HDRP(bp))&&(asize<=GET_SIZE(HDRP(bp)))){
+        return bp;
+    }
+   }
+   return NULL; //not fit
 
 }
+
+//coalesce used for remalloc
+static void *recoalesce(void* bp, size_t newSize, int *nextFree){
+   size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+   size_t size = GET_SIZE(HDRP(bp));
+   *nextFree = 0;
+   if (prev_alloc && next_alloc) { /* Case 1 */
+        return bp;
+   }
+
+    else if (prev_alloc && !next_alloc) { /* Case 2 */
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        if(size>=newSize){
+            removeFreePointer(NEXT_BLKP(bp));
+            PUT(HDRP(bp), PACK(size, 1));
+            PUT(FTRP(bp), PACK(size,1));
+            *nextFree=1;
+            //return bp;
+        }
+        return bp;
+    }
+
+    else if (!prev_alloc && next_alloc) { /* Case 3 */
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        if(size>=newSize){
+            removeFreePointer(PREV_BLKP(bp));
+            PUT(FTRP(bp), PACK(size, 1));
+            PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1));
+            bp = PREV_BLKP(bp);
+            //return bp;
+        }
+        return bp;
+    }
+
+    else { /* Case 4 */
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
+        GET_SIZE(FTRP(NEXT_BLKP(bp)));
+        if(size>=newSize){
+            removeFreePointer(NEXT_BLKP(bp));
+            removeFreePointer(PREV_BLKP(bp));
+            PUT(HDRP(PREV_BLKP(bp)), PACK(size, 1));
+            PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 1));
+            bp = PREV_BLKP(bp);
+            //return bp;
+        }
+        return bp;
+    }
+        //insertFreePointer(bp);
+        //return bp;
+
+ }
+
+
+
 //__________________________________________________________________________________________
 /* 
  * mm_init - initialize the malloc package.
@@ -307,38 +392,88 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
-    size_t size = GET_SIZE(HDRP(bp));
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
-    coalesce(bp);
+    size_t size = GET_SIZE(HDRP(ptr));
+
+    PUT(HDRP(ptr), PACK(size, 0));
+    PUT(FTRP(ptr), PACK(size, 0));
+
+    // char* bp = coalesce(ptr);
+    // PUT(HDRP(bp),PACK(size, 0));
+    // PUT(seg_list, bp);
+    coalesce(ptr);
 }
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
 void *mm_realloc(void *ptr, size_t size)
-{
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
+{   
+    void* result;
+    int nextFree;
+    if(ptr==NULL) return mm_malloc(size);
+    if(size==0)
+    { 
+        mm_free(ptr);
+        return ptr;
+    }
+
+    size_t asize=0;
+
+    //alignment
+    if(size<=DSIZE){
+        asize=2*DSIZE;
+    }
+    else{
+        asize=DSIZE*((size+(DSIZE)+(DSIZE-1))/DSIZE);
+    }
+
+   //if the size are euqal
+    if(asize==size){
+        return ptr;
+    }
+
+    if(asize>size){
+        place(ptr,asize);
+        return ptr;
+    }
+
+    else{
+        result = recoalesce(ptr,size,&nextFree);
+        if(nextFree){
+           place(result,asize);
+           return result;
+        }else{
+            //if point to different address
+            if(ptr!=result){
+                memcpy(result,ptr,size);
+                place(result,asize);
+                return result;
+            }else{
+                result = malloc(size);
+                memcpy(result,ptr,size);
+                place(result,asize);
+                return result;
+            }
+        }
+    }
     
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+
+
+
+    // void *oldptr = ptr;
+    // void *newptr;
+    // size_t copySize;
+    
+    // newptr = mm_malloc(size);
+    // if (newptr == NULL)
+    //   return NULL;
+    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    // if (size < copySize)
+    //   copySize = size;
+    // memcpy(newptr, oldptr, copySize);
+    // mm_free(oldptr);
+    // return newptr;
 }
-
-
-
-
-
-
-
 
 
 
